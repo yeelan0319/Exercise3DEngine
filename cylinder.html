@@ -1,0 +1,257 @@
+<html>
+<head>
+<meta charset = "utf-8" />
+<title>3D rotating cylinder</title>
+
+</head>
+<body>
+<form>
+<input name = 'height' type="text" id="height" placeholder="height"/>
+<input name = 'radius' type="text" id="radius" placeholder="radius"/>
+<input name = 'resolution' type="text" id="resolution" placeholder="resolution"/>
+<input name = 'x' type="text" id="origin-x" placeholder="origin-x" value="0"/>
+<input name = 'y' type="text" id="origin-y" placeholder="origin-y" value="0"/>
+<input name = 'z' type="text" id="origin-z" placeholder="origin-z" value="0"/>
+<input type = 'button' value='create' id="create-cylinder"/>
+<input type = 'button' value="rotate" id="rotate-cylinder">
+</form>
+
+<form>
+<input name = 'x' type="text" id="camera-x" placeholder="camera-x" value="1000"/>
+<input name = 'y' type="text" id="camera-y" placeholder="camera-y" value="0"/>
+<input name = 'z' type="text" id="camera-z" placeholder="camera-z" value="0"/>
+<input name = 'directionVector' type="text" id="directionVector" placeholder="direction unit vector" value="[-1,0,0]"/>
+<input name = 'upVector' type="text" id="upVector" placeholder="up unit vector" value="[0,0,1]"/>
+<input type = 'button' value='create' id="create-camera"/>
+</form>
+<script type="text/javascript" src="https://code.jquery.com/jquery-2.1.1.min.js"></script>
+<script type="text/javascript" src="./sylvester.js"></script>
+<script type="text/javascript">
+
+var Point = function(radial, polar, azimuth){
+	this.radial = radial; //spherical
+	this.polar = polar;
+	this.azimuth = azimuth;
+	this.x = radial * Math.sin(polar) * Math.cos(azimuth); //Cartesian
+	this.y = radial * Math.sin(polar) * Math.sin(azimuth);
+	this.z = radial * Math.cos(polar);
+	return this;
+}
+
+var Face = function(points){
+	this.points = points;
+	return this;
+}
+
+Face.prototype = {
+	draw: function(screen){
+		screen.save();
+		screen.beginPath();
+		var projection = {
+ 			x: this.points[0].x/this.points[0].z * 500,
+ 			y: this.points[0].y/this.points[0].z * 500
+ 		}
+		screen.moveTo(projection.x, projection.y);
+		for(var i=1; i<this.points.length; i++){
+			projection = {
+ 				x: this.points[i].x/this.points[i].z * 500,
+ 				y: this.points[i].y/this.points[i].z * 500
+ 			}
+			screen.lineTo(projection.x, projection.y);
+		}
+		screen.lineTo(this.points[0].x/this.points[0].z * 500, this.points[0].y/this.points[0].z * 500);
+		screen.closePath();
+		screen.fill();
+		screen.restore();
+	}
+}
+
+var ThreeDObject = function(faces, origin){
+	this.faces = faces;
+	this.origin = origin;
+	return this;
+}
+
+ThreeDObject.prototype = {
+	xUnitV: $L([0,0,0],[1,0,0]),
+	yUnitV: $L([0,0,0],[0,1,0]),
+	zUnitV: $L([0,0,0],[0,0,1]),
+	
+	rotate: function(rotateXAngle, rotateYAngle, rotateZAngle){
+		var facesCopy = [];
+		for(var i=0; i<this.faces.length; i++){
+			var pointsCopy = [];
+			for(var j=0; j<this.faces[i].points.length; j++){
+				var point = this.faces[i].points[j];
+				var pointCopy = {
+					x: point.x,
+					y: point.y,
+					z: point.z
+				}
+				var vector = $V([pointCopy.x, pointCopy.y, pointCopy.z]);
+				var newVector = vector.rotate(rotateXAngle, this.xUnitV).rotate(rotateYAngle, this.yUnitV).rotate(rotateZAngle, this.zUnitV);
+				pointCopy.x = newVector.e(1);
+ 				pointCopy.y = newVector.e(2);
+ 				pointCopy.z = newVector.e(3);
+ 				pointsCopy.push(pointCopy);
+			}
+			var faceCopy = new Face(pointsCopy);
+			facesCopy.push(faceCopy);
+		}
+		return new ThreeDObject(facesCopy, this.origin);
+	},
+	shift: function(deltaX, deltaY, deltaZ){
+		this.origin.x += deltaX;
+		this.origin.y += deltaY;
+		this.origin.z += deltaZ;
+		return this;
+	},
+	draw: function(shiftVector, rotateMatrix, screen){
+		for(var i=0; i<this.faces.length; i++){
+			var pointsCopy = [];
+			for(var j=0; j<this.faces[i].points.length; j++){
+				var point = this.faces[i].points[j];
+				var pointCopy = {
+					x: point.x + this.origin.x,
+					y: point.y + this.origin.y,
+					z: point.z + this.origin.z
+				}
+				
+ 				var vector = $V([pointCopy.x, pointCopy.y, pointCopy.z]);
+				var newVector = rotateMatrix.multiply(vector.add(shiftVector));
+				pointCopy.x = newVector.e(1);
+ 				pointCopy.y = newVector.e(2);
+ 				pointCopy.z = newVector.e(3);
+ 				pointsCopy.push(pointCopy);
+			}
+			var faceCopy = new Face(pointsCopy);
+			faceCopy.draw(screen);
+		}
+	}
+}
+
+//from 97-98, one extra face on the side? I think it should be rounding problem...
+var Cylinder = function(radius, height, resolution, origin){
+	//create the cylinder object itself
+	var radial = Math.sqrt(radius * radius + height * height / 4);
+	var polar = Math.atan(2 * radius / height);
+	
+	var topFace = [], bottomFace = [], cylinderFaces = [];
+	
+	var previousTopPoint, previousBottomPoint, currentTopPoint, currentBottomPoint;
+	var unitRatio = 2 * Math.PI / resolution;
+	for(var azimuth = 0; azimuth < 2 * Math.PI; azimuth += unitRatio){
+		previousTopPoint = new Point(radial, polar, azimuth);
+		previousBottomPoint = new Point(radial, Math.PI-polar, azimuth);
+		currentTopPoint = new Point(radial, polar, azimuth + unitRatio);
+		currentBottomPoint = new Point(radial, Math.PI-polar, azimuth + unitRatio);
+		
+		topFace.push(previousTopPoint);
+		bottomFace.push(previousBottomPoint);
+		cylinderFaces.push(new Face([previousTopPoint, currentTopPoint, currentBottomPoint, previousBottomPoint]));
+	}
+	cylinderFaces.push(new Face(topFace));
+	cylinderFaces.push(new Face(bottomFace));
+	
+	ThreeDObject.apply(this, [cylinderFaces, origin]);
+	return this;
+}
+Cylinder.prototype = Object.create(ThreeDObject.prototype);
+Cylinder.prototype.constructor = Cylinder;
+
+var Camera = function(x, y, z, directionVector, upVector, ctxEl){
+	var that = this;
+	this.position = {
+		x: x,
+		y: y,
+		z: z
+	};	
+	this.zAxis = $V(directionVector).multiply(-1).toUnitVector();  //direction vector perpendicular to the screen, which should be z-minus-direction
+	this.yAxis = $V(upVector).toUnitVector();  //y-axis for the screen
+	this.xAxis = this.yAxis.cross(this.zAxis);  // x-axis for the screen
+	this.shiftVector = $V([-this.position.x,-this.position.y,-this.position.z]);
+	this.rotateMatrix = $M([
+		this.xAxis.elements, 
+		this.yAxis.elements, 
+		this.zAxis.elements,
+	]);
+	this.canvas = ctxEl;
+	this.screen = ctxEl.find('canvas')[0].getContext('2d'); //canvas to draw on
+	this.screen.fillStyle = 'red';
+	
+	
+	this.canvas.find('span').click(function(){that.view.apply(that)});
+	// for the moment just presume the screen is infinitely large and have see infinitely far
+	// this.fieldOfView = MAXANGLE;
+	// this.clippingDistance = MAXDISTANCE;
+	return this;
+}
+
+Camera.prototype = {
+	//shift, rotate
+	view: function(){
+		this.screen.save();
+		this.screen.clearRect(0, 0, 500, 500);
+		this.screen.translate(250, 250);
+// 		for(var k = 0; k < objectArr.length; k++){
+// 			objectArr[k].draw(this.shiftVector, this.rotateMatrix, this.screen);
+// 		}
+		cylinderCopy.draw(this.shiftVector, this.rotateMatrix, this.screen);
+		this.screen.restore();
+	}
+}
+
+var cylinder;
+var cylinderCopy;
+var cameraArr = [];
+
+document.getElementById('create-cylinder').onclick = function(){
+	var height = parseInt(document.getElementById('height').value);
+	var radius = parseInt(document.getElementById('radius').value);
+	var resolution = parseInt(document.getElementById('resolution').value);
+	var origin = {
+		x: parseInt(document.getElementById('origin-x').value),
+		y: parseInt(document.getElementById('origin-y').value),
+		z: parseInt(document.getElementById('origin-z').value)
+	}
+	cylinder = new Cylinder(radius, height, resolution, origin);
+	cylinderCopy = cylinder;
+}
+
+document.getElementById('create-camera').onclick = function(){
+	var x = parseInt(document.getElementById('camera-x').value);
+	var y = parseInt(document.getElementById('camera-y').value);
+	var z = parseInt(document.getElementById('camera-z').value);
+	
+	var directionVector = eval(document.getElementById('directionVector').value);
+	var upVector = eval(document.getElementById('upVector').value);
+	var ctxEl = $('<div>').css({
+		position: 'relative'
+	}).append($('<canvas width="500" height="500">').css({
+		border: "1px solid #000"
+	})).append($('<span>').text('render view').css({
+		position: "absolute",
+		top:0,
+		left:0
+	}));
+	$('body').append(ctxEl);
+	
+	var camera = new Camera(x,y,z,directionVector, upVector, ctxEl);
+	cameraArr.push(camera);
+}
+
+$('#rotate-cylinder').click(function(){rotateCylinder(1)});
+
+function rotateCylinder(i){
+	var camera = cameraArr[0];
+	var MINIROTATE = Math.PI/100;
+	cylinderCopy = cylinder.rotate(MINIROTATE*i, MINIROTATE*i, MINIROTATE*i);
+	i++;
+	camera.view();
+	setTimeout(function(){rotateCylinder(i)}, 100);
+}
+
+</script>
+
+</body>
+<html>
